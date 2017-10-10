@@ -31,13 +31,15 @@ class ModelSelector(object):
     def select(self):
         raise NotImplementedError
 
-    def base_model(self, num_states):
+    def base_model(self, num_states, X=None, lengths=None):
         # with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=DeprecationWarning)
         # warnings.filterwarnings("ignore", category=RuntimeWarning)
+        X = self.X if X is None else X
+        lengths = self.lengths if lengths is None else lengths
         try:
             hmm_model = GaussianHMM(n_components=num_states, covariance_type="diag", n_iter=1000,
-                                    random_state=self.random_state, verbose=False).fit(self.X, self.lengths)
+                                    random_state=self.random_state, verbose=False).fit(X, lengths)
             if self.verbose:
                 print("model created for {} with {} states".format(self.this_word, num_states))
             return hmm_model
@@ -68,6 +70,9 @@ class SelectorBIC(ModelSelector):
     Bayesian information criteria: BIC = -2 * logL + p * logN
     """
 
+    def bic(self, logL, p, logN):
+        return -2 * logL + p * logN
+
     def select(self):
         """ select the best model for self.this_word based on
         BIC score for n between self.min_n_components and self.max_n_components
@@ -76,8 +81,20 @@ class SelectorBIC(ModelSelector):
         """
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection based on BIC scores
-        raise NotImplementedError
+        n, score = None, np.float("inf")
+
+        for n_components in range(self.min_n_components, self.max_n_components + 1):
+            try:
+                logL, logN = self.base_model(n_components).score(self.X, self.lengths), np.log(len(self.X))
+                # https://discussions.udacity.com/t/number-of-parameters-bic-calculation/233235/3
+                p = n_components * (n_components - 1) + 2 * len(self.X[0]) * n_components
+                bic_score = self.bic(logL, p, logN)
+                if bic_score < score:
+                    n, score = n_components, bic_score
+            except:
+                pass
+
+        return self.base_model(n) if n is not None else None
 
 
 class SelectorDIC(ModelSelector):
@@ -93,8 +110,30 @@ class SelectorDIC(ModelSelector):
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        n, score = None, np.float("-inf")
+
+        for n_components in range(self.min_n_components, self.max_n_components + 1):
+            try:
+                logL = self.base_model(n_components).score(self.X, self.lengths)
+
+                M, dic_score = 0, 0
+                for word in self.words.keys():
+                    if word is not self.this_word:
+                        try:
+                            X, lengths = self.hwords[word]
+                            dic_score = dic_score + self.base_model(n_components, X, lengths).score(X, lengths)
+                            M = M + 1
+                        except:
+                            pass
+
+                if M is not 0 and dic_score is not 0:
+                     dic_score = logL - dic_score / M
+                     if dic_score > score:
+                         n, score = n_components, dic_score
+            except:
+                pass
+
+        return self.base_model(n) if n is not None else None
 
 
 class SelectorCV(ModelSelector):
@@ -102,8 +141,32 @@ class SelectorCV(ModelSelector):
 
     '''
 
-    def select(self):
+    def select(self, n_folds=3):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection using CV
-        raise NotImplementedError
+        n, score = None, np.float("-inf")
+        model = self.base_model(self.n_constant)
+
+        try:
+            split_method = KFold(min(n_folds, len(self.sequences)))
+
+            for n_components in range(self.min_n_components, self.max_n_components + 1):
+                cv_scores = []
+                try:
+                    for cv_train_idx, cv_test_idx in split_method.split(self.sequences):
+                        try:
+                            cv_train_X, cv_train_lengths = combine_sequences(cv_train_idx, self.sequences)
+                            cv_test_X, cv_test_lengths = combine_sequences(cv_test_idx, self.sequences)
+                            cv_model = self.base_model(n_components, cv_train_X, cv_train_lengths)
+                            cv_scores.append(cv_model.score(cv_test_X, cv_test_lengths))
+                        except:
+                            pass
+                except:
+                    pass
+                cv_score = np.average(cv_scores) if len(cv_scores) > 0 else float("-inf")
+                if cv_score > score:
+                    n, score = n_components, cv_score
+        except:
+            pass
+
+        return self.base_model(n) if n is not None else None
