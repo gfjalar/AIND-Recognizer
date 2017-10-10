@@ -70,9 +70,6 @@ class SelectorBIC(ModelSelector):
     Bayesian information criteria: BIC = -2 * logL + p * logN
     """
 
-    def bic(self, logL, p, logN):
-        return -2 * logL + p * logN
-
     def select(self):
         """ select the best model for self.this_word based on
         BIC score for n between self.min_n_components and self.max_n_components
@@ -85,10 +82,10 @@ class SelectorBIC(ModelSelector):
 
         for n_components in range(self.min_n_components, self.max_n_components + 1):
             try:
-                logL, logN = self.base_model(n_components).score(self.X, self.lengths), np.log(len(self.X))
-                # https://discussions.udacity.com/t/number-of-parameters-bic-calculation/233235/3
-                p = n_components * (n_components - 1) + 2 * len(self.X[0]) * n_components
-                bic_score = self.bic(logL, p, logN)
+                model = self.base_model(n_components)
+                logL, logN = model.score(self.X, self.lengths), np.log(len(self.X))
+                p = n_components ** 2 + 2 * n_components * model.n_features - 1
+                bic_score = -2 * logL + p * logN
                 if bic_score < score:
                     n, score = n_components, bic_score
             except:
@@ -114,22 +111,11 @@ class SelectorDIC(ModelSelector):
 
         for n_components in range(self.min_n_components, self.max_n_components + 1):
             try:
-                logL = self.base_model(n_components).score(self.X, self.lengths)
-
-                M, dic_score = 0, 0
-                for word in self.words.keys():
-                    if word is not self.this_word:
-                        try:
-                            X, lengths = self.hwords[word]
-                            dic_score = dic_score + self.base_model(n_components, X, lengths).score(X, lengths)
-                            M = M + 1
-                        except:
-                            pass
-
-                if M is not 0 and dic_score is not 0:
-                     dic_score = logL - dic_score / M
-                     if dic_score > score:
-                         n, score = n_components, dic_score
+                model = self.base_model(n_components)
+                scores = [model.score(X, lengths) for (word, (X, lengths)) in self.hwords.items() if word != self.this_word]
+                dic_score = model.score(self.X, self.lengths) - np.mean(scores)
+                if dic_score > score:
+                    n, score = n_components, dic_score
             except:
                 pass
 
